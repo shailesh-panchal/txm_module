@@ -1,0 +1,13 @@
+
+follow below step to compile txm code 
+
+1. get the copy of Nordik sdk copy and soft device copy from nordic site
+
+a. nRF5SDK1702d674dde.zip
+b. s113nrf52720.zip
+
+2. extract to your local folder 
+3. extract the txm.zip file to ../nRF5_SDK_17.0.2_d674dde/examples/ble_peripheral/
+4. compile with segger embbeded studio.
+
+thanks
