@@ -2,7 +2,7 @@
 #include "txm_timer.h"
 
 #define TXM_TIMER_TICK_MS   500
-#define MAX_TIMER_TASK_LIST 10
+#define MAX_TIMER_TASK_LIST 12
 
 
 /* system timer with 100ms tick */
@@ -40,7 +40,7 @@ uint8_t txm_timer_init(void)
         return 0;
     }
 
-    /* setup m_timer for compare event every 400ms */
+    /* setup m_timer for compare event every 500ms */
     uint32_t ticks = nrf_drv_timer_ms_to_ticks(&txm_timer, TXM_TIMER_TICK_MS);
     nrf_drv_timer_extended_compare(&txm_timer,
                                    NRF_TIMER_CC_CHANNEL0,

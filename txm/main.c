@@ -41,7 +41,7 @@ int main(void)
     // Initialize.
     if(0 == txm_board_init())
     {
-        BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF); //play buzzer on erro
+
         Put_device_insleep(1);
     }
 
@@ -50,7 +50,6 @@ int main(void)
     // Start execution
     if(0 == txm_ble_advertising_start())
     {
-        BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF); //play buzzer on error
         Put_device_insleep(1);
     }
 #endif
@@ -58,7 +57,7 @@ int main(void)
     for (;;)
     {
        txm_perform_task(); 
-        idle_state_handle();
+       idle_state_handle();
     }
 }
 

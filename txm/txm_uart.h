@@ -16,6 +16,7 @@ typedef struct
 
 
 void txm_uart_init(void);
+void txm_uart_send(char *pdata, uint8_t length);
 
 
 #ifdef __cplusplus

@@ -1,4 +1,5 @@
 #include "txm_board.h"
+#include "nrf_delay.h"
 #include "app_fifo.h"
 
 
@@ -28,6 +29,8 @@
 
 #define TX_POWER_LEVEL                  (0)                                    /**< TX Power Level value. This will be set both in the TX Power service, in the advertising data, and also used to set the radio transmit power. */
 
+#define DEVICE_PUT_IN_SLEEP_MODE_VALUE  1800
+
 extern app_fifo_t    m_receive_fifo;
 
 BLE_NUS_DEF(m_nus, NRF_SDH_BLE_TOTAL_LINK_COUNT);                                   /**< BLE NUS service instance. */
@@ -47,8 +50,9 @@ static txm_ble_info_t txm_ble_info;
 
 
 
-static uint8_t SendDataOverBle(void);
+static void SendDataOverBle(void);
 static void register_ble_task(void);
+static void txm_ble_connection_done(void);
 /**@brief Function for assert macro callback.
  *
  * @details This function will be called in case of an assert in the SoftDevice.
@@ -98,14 +102,15 @@ static void ble_evt_handler(ble_evt_t const * p_ble_evt, void * p_context)
             }
             else
             {
-              txm_ble_advertising_stop();              
+              txm_ble_connection_done();              
             }
             break;
 
         case BLE_GAP_EVT_DISCONNECTED:
             TXM_LOG_INFO("Disconnected");
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
-            txm_ble_advertising_start();
+            if(p_ble_evt->evt.gap_evt.params.disconnected.reason != BLE_HCI_LOCAL_HOST_TERMINATED_CONNECTION)
+                txm_ble_advertising_start();
             break;
 
         case BLE_GAP_EVT_PHY_UPDATE_REQUEST:
@@ -291,7 +296,6 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
             break;
         case BLE_ADV_EVT_IDLE:
             //play buzzer 
-            BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF);
             Put_device_insleep(1);
             break;
         default:
@@ -370,7 +374,7 @@ static uint8_t gap_params_init(void)
         return 0;
     }
 
-    sprintf(device_name,"%s%x%x",DEVICE_NAME,m_my_addr.addr[1],m_my_addr.addr[0]);
+    sprintf(device_name,"%s%02x%02x",DEVICE_NAME,m_my_addr.addr[1],m_my_addr.addr[0]);
 
     //sprintf(device_name,"%s",DEVICE_NAME);
 
@@ -425,8 +429,8 @@ static void nrf_qwr_error_handler(uint32_t nrf_error)
 /**@snippet [Handling the data received over BLE] */
 static void nus_data_handler(ble_nus_evt_t * p_evt)
 {
-    char receivedata[6] = {0};
-    uint32_t length = 6;
+    char receivedata[20] = {0};
+    uint32_t length = 20;
     
     if (p_evt->type == BLE_NUS_EVT_RX_DATA)
     {
@@ -442,6 +446,10 @@ static void nus_data_handler(ble_nus_evt_t * p_evt)
         {
             //flash the green led 
             LedCadense(LED_COLOR_GREEN,LED_CADENSE_1S_ON_1S_OFF);
+        }
+        else if(0 == strncasecmp("TXM_POWER_OFF",receivedata,13))
+        {
+            power_off();
         }
     }
     else if(p_evt->type == BLE_NUS_EVT_COMM_STARTED)
@@ -553,7 +561,55 @@ static uint8_t conn_params_init(void)
     return 1;
 }
 
+static void register_pending_task(void)
+{
+    if(txm_ble_info.pending_timer_task != TIMER_INVALID_HANDLE)
+    {
+        txm_remove_task(txm_ble_info.pending_timer_task);
+    }
+    txm_ble_info.pending_timer_task = TIMER_INVALID_HANDLE;
+  
+    //add the 10 second task to get ble status
+    // 500 x 2  = 1 s
+    // 10 X 2 = 20
+    txm_ble_info.pending_timer_task = txm_add_task(20,0,&SendDataOverBle);
+    if(txm_ble_info.pending_timer_task == TIMER_INVALID_HANDLE)
+    {
+        TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
+    }
+}
 
+
+uint8_t txm_ble_advertising_restart(void)
+{
+    txm_ble_advertising_stop();
+
+    if(0 == txm_ble_advertising_start())
+    {
+        Put_device_insleep(1);
+    }
+    return 1;
+}
+
+uint8_t is_txm_ble_peer_connected(void)
+{
+    if(m_conn_handle == BLE_CONN_HANDLE_INVALID)
+       return 0;
+    else
+       return 1;
+}
+void txm_ble_disconnect_from_peer(void)
+{
+    //first get the ble connection staus
+    if(m_conn_handle == BLE_CONN_HANDLE_INVALID)
+       return;  
+     
+    uint32_t err_code = sd_ble_gap_disconnect(m_conn_handle,BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+    if(err_code != NRF_SUCCESS)
+    {
+        TXM_LOG_DEBUG("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
+    }
+}
 /**@brief Function for starting advertising.
  */
 uint8_t txm_ble_advertising_start(void)
@@ -574,20 +630,23 @@ uint8_t txm_ble_advertising_start(void)
     register_ble_task();
     return 1;
 }
+
 void txm_ble_advertising_stop(void)
 {
- #if 0
-  if(ble_advertising_on == 1)
-  {
-      uint32_t err_code = sd_ble_gap_adv_stop(m_advertising.adv_handle);
-     if(err_code != NRF_SUCCESS)
+    if(ble_advertising_on == 1)
     {
+      uint32_t err_code = sd_ble_gap_adv_stop(m_advertising.adv_handle);
+      if(err_code != NRF_SUCCESS)
+      {
         TXM_LOG_ERROR("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
-        return 0;
+      }
     }
-  }
     ble_advertising_on = 0;
-  #endif
+
+}
+
+static void txm_ble_connection_done(void)
+{
 
   BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF);
   LedCadense(LED_COLOR_GREEN,LED_CADENSE_1S_ON_1S_OFF);
@@ -596,9 +655,12 @@ void txm_ble_advertising_stop(void)
   {
       txm_remove_task(txm_ble_info.timer_task);
   }
+
+  register_pending_task();
+
 }
 
-static uint8_t SendDataOverBle(void)
+static void SendDataOverBle(void)
 {
     uint32_t pendingData = 0;
     uint8_t tmpdata[MAX_UART_MESSAGE_SIZE];
@@ -606,9 +668,10 @@ static uint8_t SendDataOverBle(void)
     uint16_t tmplength = MAX_UART_MESSAGE_SIZE;
     uint32_t err_code;
 
+
     //first get the ble connection staus
     if(m_conn_handle == BLE_CONN_HANDLE_INVALID)
-       return 0;
+       return;
 
     while(1)
     {
@@ -620,7 +683,7 @@ static uint8_t SendDataOverBle(void)
            if(err_code != NRF_SUCCESS)
            {
                   TXM_LOG_ERROR("Faied read data from fifo %d @ %d in %s\n",err_code,__LINE__,__FILE__);
-                  return 0;
+                  return;
            }
            do
            { 
@@ -635,15 +698,13 @@ static uint8_t SendDataOverBle(void)
                   (err_code != NRF_ERROR_NOT_FOUND))
               {
                   TXM_LOG_ERROR("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
-                  return 0;
+                  return;
               }
            }while (err_code == NRF_ERROR_RESOURCES);
       }
       else
         break;
     }
-
-    return 1;
 }
 
 uint8_t txm_send_data_over_ble(char *data, uint32_t len)
@@ -652,6 +713,7 @@ uint8_t txm_send_data_over_ble(char *data, uint32_t len)
     uint8_t tmpdata[MAX_UART_MESSAGE_SIZE];
     uint32_t length = MAX_UART_MESSAGE_SIZE;
     uint16_t tmplength = MAX_UART_MESSAGE_SIZE;
+
    //first get the ble connection staus
     if(m_conn_handle == BLE_CONN_HANDLE_INVALID)
        return 0;
@@ -663,9 +725,10 @@ uint8_t txm_send_data_over_ble(char *data, uint32_t len)
     }
     else
     {      
-      if(1 == SendDataOverBle())
-        return 0;
+      SendDataOverBle();
+      return 0;
     }
+
     do
     { 
         err_code = ble_nus_data_send(&m_nus, &tmpdata[0], &tmplength, m_conn_handle);
@@ -689,19 +752,6 @@ uint8_t txm_send_data_over_ble(char *data, uint32_t len)
 
 static void ble_device_wait_timeout(void)
 {
-   // stop advertise ment.
-  if(ble_advertising_on == 1)
-  {
-    uint32_t err_code = sd_ble_gap_adv_stop(m_advertising.adv_handle);
-    if(err_code != NRF_SUCCESS)
-    {
-        TXM_LOG_ERROR("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
-    }
-  }
-    ble_advertising_on = 0;
-
-    txm_ble_advertising_stop();
-
     //now put device in sleep state
     Put_device_insleep(1);
 }
@@ -715,13 +765,13 @@ static void register_ble_task(void)
     }
     txm_ble_info.timer_task = TIMER_INVALID_HANDLE;
   
-    //add the 15 minute task to get adc value;
+    //add the 15 minute task to get ble status
     // 500 x 2 = 1 s
     // 60 X 1s = 1 minute
-    // 15 x1min = 30 minute
+    // 15 x1min = 15 minute
     // 15 minute = 15 x 60 x 2 = 1800
     // it is perodic task
-    txm_ble_info.timer_task = txm_add_task(1800,1,&ble_device_wait_timeout);
+    txm_ble_info.timer_task = txm_add_task(DEVICE_PUT_IN_SLEEP_MODE_VALUE,1,&ble_device_wait_timeout);
     if(txm_ble_info.timer_task == TIMER_INVALID_HANDLE)
     {
         TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
@@ -762,5 +812,5 @@ uint8_t txm_ble_init(void)
       return ret_value;
     }
     txm_ble_info.timer_task = TIMER_INVALID_HANDLE;
-    return ret_value;
+    txm_ble_info.pending_timer_task = TIMER_INVALID_HANDLE;
 }

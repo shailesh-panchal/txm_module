@@ -92,7 +92,7 @@ else{NRF_LOG_ERROR(__VA_ARGS__);}
 typedef struct
 {
   nrf_saadc_value_t     value[ADC_VALUE_MAX_SIZE][ADC_SAMPLES_IN_BUFFER];
-  uint16_t timer_task;;
+  uint16_t timer_task;
   void (*conversion_done) (uint16_t );
 }txm_adc_info_t;
 
@@ -133,6 +133,7 @@ typedef enum
     BUZZER_CADENSE_OFF = 0,
     BUZZER_CADENSE_ON,
     BUZZER_CADENSE_1S_ON_1S_OFF,
+    BUZZER_CADENSE_2S_ON_2S_OFF,
     BUZZER_CADENSE_3S_ON_3S_OFF,
     BUZZER_CADENSE_INVALID= 0xFF
 }BUZZER_CADENSE_e;
@@ -147,6 +148,11 @@ typedef struct
   void (*callback) (void);
 }txm_buzzer_cadense_info_t;
 
+typedef struct
+{
+  uint16_t timer_handle;
+  void (*callback) (void);
+}txm_bettary_status_info_t;
 
 
 uint8_t txm_board_init(void);
@@ -161,6 +167,8 @@ void max323_off(void);
 void Put_device_insleep(uint8_t second);
 void Put_device_inOff(void);
 void power_off(void);
+void PlayBuzzer(uint8_t sec);
+void txm_wakeup(void);
 
 #ifdef __cplusplus
 }

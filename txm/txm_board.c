@@ -17,9 +17,15 @@
         ((((ADC_VALUE) * ADC_REF_VOLTAGE_IN_MILLIVOLTS) / ADC_RES_10BIT) * ADC_PRE_SCALING_COMPENSATION)
 
 
+#define DEVICE_PUT_IN_OFF_MODE_VALUE    1800
+
+#define WAKE_UP_MESSAGE   "wakeup"
+#define BETTARY_MESSAGE_LEN     50
+
 
 /* system adc parameter */
 static txm_adc_info_t txm_adc_info;
+static uint8_t startBuzzerPlay = 0;
 
 /* system led cadense parameter control one led cadense only at time*/
 static txm_led_cadense_info_t led_cadense_info;
@@ -28,6 +34,12 @@ static uint8_t ledtogglebit = 1;
 //
 static uint16_t sleep_wait_timer_handle = TIMER_INVALID_HANDLE;
 static uint16_t poweroff_wait_timer_handle = TIMER_INVALID_HANDLE;
+static uint8_t device_is_insleep_mode = 0;
+static char bettary_message[BETTARY_MESSAGE_LEN] = {0};
+
+
+
+static void register_adc_task(void);
 /**@brief Function for initializing the nrf log module.
  */
 static void log_init(void)
@@ -174,6 +186,13 @@ void LedCadense(LED_COLOR_e ledcolor,LED_CADENSE_e cadense)
     switch(cadense)
     {
       case LED_CADENSE_OFF:
+          if(led_cadense_info.timer_handle != TIMER_INVALID_HANDLE)
+          {
+             txm_remove_task(led_cadense_info.timer_handle);
+       
+          }
+          led_cadense_info.timer_handle = TIMER_INVALID_HANDLE;
+
         if(ledcolor == LED_COLOR_RED)
           led_red(0);
         else if(ledcolor == LED_COLOR_GREEN)
@@ -184,6 +203,12 @@ void LedCadense(LED_COLOR_e ledcolor,LED_CADENSE_e cadense)
       break;
 
       case LED_CADENSE_ON:
+        if(led_cadense_info.timer_handle != TIMER_INVALID_HANDLE)
+        {
+            txm_remove_task(led_cadense_info.timer_handle);
+        }
+        led_cadense_info.timer_handle = TIMER_INVALID_HANDLE;
+
         if(ledcolor == LED_COLOR_RED)
           led_red(1);
         else if(ledcolor == LED_COLOR_GREEN)
@@ -234,9 +259,7 @@ static void buzzer_cadense_proc(void)
         
     if(togglebit == 0) // off cadense
     {
-          buzzer_off();
-          togglebit = 1;
-          
+          togglebit = 1;     
           if(buzzer_cadense_info.replay == 0xff)
           {
               txm_reload_task(buzzer_cadense_info.timer_handle,buzzer_cadense_info.offtime);
@@ -249,6 +272,8 @@ static void buzzer_cadense_proc(void)
             {
                 //change the timer mode to unique
                 txm_timer_mode_change(buzzer_cadense_info.timer_handle,0);
+
+                startBuzzerPlay = 0;
             }
             else
             {
@@ -258,12 +283,12 @@ static void buzzer_cadense_proc(void)
     }
     else // on cadense
     {
-        buzzer_on();
+        startBuzzerPlay = 1;
         togglebit = 0;
         txm_reload_task(buzzer_cadense_info.timer_handle,buzzer_cadense_info.ontime);
     }
 }
-#if 0
+#if 1
 static void register_buzzer_task(BUZZER_CADENSE_e cadense,uint8_t ontime,uint8_t offtime,uint8_t replay)
 {
     if(buzzer_cadense_info.timer_handle != TIMER_INVALID_HANDLE)
@@ -285,9 +310,28 @@ static void register_buzzer_task(BUZZER_CADENSE_e cadense,uint8_t ontime,uint8_t
 }
 
 #endif
-static void PlayBuzzer(uint8_t sec)
+
+void PlayBuzzer(uint8_t sec)
 {
-    uint32_t index = 0;
+#if 0
+  static uint8_t togglebit = 1;
+
+  if(0 == startBuzzerPlay)
+      return;
+    
+  if(togglebit == 0) // off cadense
+  {
+    buzzer_off();
+    togglebit = 1;
+  }
+  else
+  {
+    buzzer_on();
+    togglebit = 0;
+  }
+#else  
+  
+  uint32_t index = 0;
     //loop one iteration is 2 ms 
     //so second  it will be 1000/6 = 166
     for(index; index < (sec * 500 * 10); index++)
@@ -297,6 +341,7 @@ static void PlayBuzzer(uint8_t sec)
       buzzer_off();
       nrf_delay_us(100);
     }
+#endif
 }
 void BuzzerCadense(BUZZER_CADENSE_e cadense)
 {
@@ -316,8 +361,14 @@ void BuzzerCadense(BUZZER_CADENSE_e cadense)
         //register_buzzer_task(cadense,1,1,1);
       break;
 
+      case BUZZER_CADENSE_2S_ON_2S_OFF:
+        PlayBuzzer(2);
+        //register_buzzer_task(cadense,1,1,1);
+      break;
+
       case BUZZER_CADENSE_3S_ON_3S_OFF:
         PlayBuzzer(3);
+        //register_buzzer_task(cadense,1,1,3);
         break;
 
       default:
@@ -362,7 +413,7 @@ static void sense_input_voltage(uint16_t data)
       //check the input voltage
       //function is called for every 500ms 
       static uint16_t longpress_count = 0;
-      char message[20] = "Change Battery";
+      static uint16_t message_send_timout = 0;
 
       //equaltion for adc voltage 
       // Input = 9.0 v then output = 2.3 to 2.2 v  (as per voltage divider circuit R1 = 51k and R2 = 18K)
@@ -376,6 +427,13 @@ static void sense_input_voltage(uint16_t data)
       //voltage between 0 to 500 mv 1
       if(data >= 00 && data <= 500)
       {
+      #if 0
+          sprintf(message,"sense v = %d\n\r",data);
+          if(0 == txm_send_data_over_ble(message,strlen(message)))
+          {
+                 TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
+          }
+     #endif
           longpress_count++;
 
           //equal to 3 second 
@@ -385,42 +443,60 @@ static void sense_input_voltage(uint16_t data)
               //put system in power off state
               power_off();
           }
-          else
-          { 
-              //wake up device from sleep
-              //check if device in sleep mode then wake of it
-              //TODO shailesh
+      }
+      //voltage between 1170 mv to 1000 mv //input voltage is 4.0 to 3.8 v
+      else if(data >=991 && data <= 1050)
+      {
+          if(0 <= message_send_timout)
+          {
+              message_send_timout = 10;
+              //flash read lead four time
+              if(1 == is_txm_ble_peer_connected())
+                  LedCadense(LED_COLOR_RED,LED_CADENSE_4S_ON_4S_OFF);
 
+              sprintf(bettary_message,"#Change Battery\n\r");
+              if(0 == txm_send_data_over_ble(bettary_message,strlen(bettary_message)))
+              {
+                   TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
+              }
           }
+          message_send_timout--;
       }
-      //voltage between 1000 mv to 1500 mv //input voltage is 6.0v
-      else if(data >=1500 && data <= 1600)
+      //voltage between 991 mv to 910 mv //input voltage is 3.8 to 3.55 v
+      else if(data >=901 && data <= 990)
       {
-          //flash read lead four time
-          LedCadense(LED_COLOR_RED,LED_CADENSE_4S_ON_4S_OFF);
-          //send the message to handset "change Battery"
-         if(0 == txm_send_data_over_ble(message,strlen(message)))
-         {
-             TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
-         }
-         
-         Put_device_insleep(2);
-          //put device in sleep mode
+          if(0 <= message_send_timout)
+          {
+              message_send_timout = 10;
+              strcpy(bettary_message,"$Battery Dead\n\r");
+
+              if(0 == txm_send_data_over_ble(bettary_message,strlen(bettary_message)))
+              {
+                TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
+              }
+              //disconnect from Mobile device. Stop Advertisment
+              //put device in sleep mode
+              Put_device_insleep(2);
+          }
+          message_send_timout--;
       }
-      //voltage between 1100 mv to 1400 mv  //input voltage is 4.5 to 5.1 v
-      else if(data >=1100 && data <= 1400)
+      //voltage between 900  //input voltage is 3.5
+      else if(data < 900)
       {
-         BuzzerCadense(BUZZER_CADENSE_3S_ON_3S_OFF);
-         //send the message to handset "Battery Dead"
-         strcpy(message,"Battery Dead");
-         if(0 == txm_send_data_over_ble(message,strlen(message)))
-         {
-             TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
-         }
-          Put_device_insleep(2);
+         BuzzerCadense(BUZZER_CADENSE_2S_ON_2S_OFF);
+         //sleep for 1 second
+         nrf_delay_ms(1000);
+         power_off();
       }
       else
       {
+          if(longpress_count >= 2) 
+          { 
+              //wake up device from sleep
+              //check if device in sleep mode then wake of it
+              //restart BLE adverrising
+              txm_wakeup();
+          }
           longpress_count = 0;
       }
 }
@@ -430,10 +506,15 @@ static void txm_trigger_saadc(void)
 {
     ret_code_t err_code;
     err_code = nrfx_saadc_sample();
+    char message[50]={0};
     if(err_code != NRF_SUCCESS)
     {
         TXM_LOG_ERROR("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
-    }
+        sprintf(message,"1 %d, %d",err_code,__LINE__);
+        txm_uart_send(message,strlen(message));
+        //on error regiser adc task again
+      //  register_adc_task();
+    };
 }
 
 static void register_adc_task(void)
@@ -448,7 +529,7 @@ static void register_adc_task(void)
   
     //add the 500ms task to get adc value;
     // it is perodic task
-    txm_adc_info.timer_task = txm_add_task(1,0,&txm_trigger_saadc);
+    txm_adc_info.timer_task = txm_add_task(1,1,&txm_trigger_saadc);
     if(txm_adc_info.timer_task == TIMER_INVALID_HANDLE)
     {
         TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
@@ -459,7 +540,7 @@ static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 {
     nrf_saadc_value_t adc_result;
     uint16_t milli_volts = 0;
-
+    char message[50] = {0};
 
     if (p_event->type == NRF_DRV_SAADC_EVT_DONE)
     {
@@ -470,6 +551,8 @@ static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
         if(err_code != NRF_SUCCESS)
         {
             TXM_LOG_ERROR("Faied with Error %d @ %d in %s\n",err_code,__LINE__,__FILE__);
+            sprintf(message,"1 %d, %d",err_code,__LINE__);
+            txm_uart_send(message,strlen(message));
         }
         else
         {
@@ -477,9 +560,10 @@ static void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
           milli_volts = ADC_RESULT_IN_MILLI_VOLTS(adc_result);
           txm_adc_info.conversion_done(milli_volts);
         }
-        register_adc_task();
     }
+    //register_adc_task();
 }
+
 static uint8_t sense_input_volatge_init(void)
 {
   ret_code_t err_code;
@@ -533,13 +617,25 @@ static uint8_t power_management_init(void)
 
 static void sleep_mode_enter(void)
 {
-     uint32_t err_code;
-     //TODO shailesh
     Put_device_inOff();
 }
 
 void Put_device_insleep(uint8_t second)
 {
+    if(device_is_insleep_mode == 1)
+        return;
+
+    //All led off
+    LedCadense(LED_COLOR_GREEN,LED_CADENSE_OFF);
+    LedCadense(LED_COLOR_RED,LED_CADENSE_OFF);
+
+    BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF); //play buzzer on erro
+
+    if(1 == is_txm_ble_peer_connected())
+          txm_ble_disconnect_from_peer();
+    
+    txm_ble_advertising_stop();
+    
     //run timer as per input parameter
     if(sleep_wait_timer_handle != TIMER_INVALID_HANDLE)
     {
@@ -553,6 +649,8 @@ void Put_device_insleep(uint8_t second)
     {
         TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
     }
+
+    device_is_insleep_mode = 1;
 }
 
 void Put_device_inOff(void)
@@ -567,7 +665,12 @@ void Put_device_inOff(void)
     poweroff_wait_timer_handle = TIMER_INVALID_HANDLE;
   
     //add the second task to put system in poweroff
-    poweroff_wait_timer_handle = txm_add_task(450,0,&power_off);
+    // 500 x 2 = 1 s
+    // 60 X 1s = 1 minute
+    // 15 x1min = 30 minute
+    // 15 minute = 15 x 60 x 2 = 1800
+    
+    poweroff_wait_timer_handle = txm_add_task(DEVICE_PUT_IN_OFF_MODE_VALUE,0,&power_off);
     if(poweroff_wait_timer_handle == TIMER_INVALID_HANDLE)
     {
         TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
@@ -582,9 +685,11 @@ void power_off(void)
   regulator_off();
 }
 
-uint8_t txm_get_battery_status(void)
+void txm_wakeup(void)
 {
-    //TODO shailesh
+    device_is_insleep_mode = 0;
+    if(0 == is_txm_ble_peer_connected())
+          txm_ble_advertising_restart();
 }
 
 uint8_t txm_board_init(void)
@@ -613,13 +718,13 @@ uint8_t txm_board_init(void)
   buzzer_init();
 
   max3232_init();
-  max323_on();
+  max323_off();
 
   ret_value = sense_input_volatge_init();
   if(ret_value == 0)
     return ret_value;
 
-  ret_value = txm_ble_init();
+ ret_value = txm_ble_init();
 
   return ret_value;
 }

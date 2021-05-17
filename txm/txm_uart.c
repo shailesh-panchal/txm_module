@@ -15,6 +15,7 @@
 #define LAST_CHAR_INDEX               (MAX_UART_MESSAGE_SIZE - 1)
 #define SECOND_LAST_CHAR_INDEX        (MAX_UART_MESSAGE_SIZE - 2)
 
+#define UART_DATA_WAIT_TIME_VALUE   3600
 
 app_fifo_t    m_receive_fifo;
 static uint8_t receive_data[MAX_UART_DATA_BUFFER_SIZE];
@@ -26,33 +27,26 @@ static void register_uart_task(void);
 static void uart_data_wait_timout(void)
 {
     // go into sleep mode and send sleep mode message to Mobile device if connected.
-    char data[]="TXM Poweroff\n\r";
+    char data[]="@TXM Sleep Mode\n\r";
     uint8_t datalen = strlen(data);
     uint32_t       err_code;
 
-#if 1
-   if(0 != txm_send_data_over_ble(data,datalen))
-   {
-      TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
-   }
-
-#else
-    for (uint32_t i = 0; i < datalen; i++)
+    if(0 == is_txm_ble_peer_connected())
     {
-      do
-      {
-          err_code = app_uart_put(data[i]);
-          if ((err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_BUSY))
-          {
-              NRF_LOG_ERROR("Failed receiving NUS message. Error 0x%x. ", err_code);
-          }
-      } while (err_code == NRF_ERROR_BUSY);
-
+        //reload the uart data wait timer 
+        txm_reload_task(txm_uart_info.timer_task,UART_DATA_WAIT_TIME_VALUE);
+        return;
     }
-#endif
-    //play buzzer for second
-   BuzzerCadense(BUZZER_CADENSE_1S_ON_1S_OFF);
-   Put_device_insleep(1);
+
+    if(0 != txm_send_data_over_ble(data,datalen))
+    {
+        TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
+    }
+
+    txm_ble_disconnect_from_peer();
+
+    //disconnect from the peer
+    Put_device_insleep(2);
 }
 
 
@@ -71,7 +65,7 @@ static void register_uart_task(void)
     // 30 x1min = 30 minute
     // 30 minute = 30 x 60 x 2 = 3600
     // it is perodic task
-    txm_uart_info.timer_task = txm_add_task(3600,1,&uart_data_wait_timout);
+    txm_uart_info.timer_task = txm_add_task(UART_DATA_WAIT_TIME_VALUE,1,&uart_data_wait_timout);
     if(txm_uart_info.timer_task == TIMER_INVALID_HANDLE)
     {
         TXM_LOG_ERROR("Faied with Error @ %d in %s\n",__LINE__,__FILE__);
@@ -91,7 +85,10 @@ static void uart_event_handle(app_uart_evt_t * p_event)
         case APP_UART_DATA_READY:
 
             //reload the uart data wait timer 
-            txm_reload_task(txm_uart_info.timer_task,3600);
+            txm_reload_task(txm_uart_info.timer_task,UART_DATA_WAIT_TIME_VALUE);
+
+            //wake up device from sleep mode
+            txm_wakeup();
             
             err_code = app_uart_get(&rxdata[index]);
             if(err_code != NRF_SUCCESS)
@@ -99,24 +96,6 @@ static void uart_event_handle(app_uart_evt_t * p_event)
                 TXM_LOG_ERROR("Faied to read data from uart @ %d in %s\n",__LINE__,__FILE__);
                 return;
             }
-#if 0          
-            /*remove below code after testing*/
-            length = index+1;
-            err_code = app_fifo_write(&m_receive_fifo,&rxdata[0],&length);
-            if(err_code != NRF_SUCCESS)
-            {
-                TXM_LOG_ERROR("Faied to write data to fifo @ %d in %s\n",__LINE__,__FILE__);
-            }
-            else
-            {
-               if(0 == txm_send_data_over_ble(NULL,0))
-               {
-                   TXM_LOG_ERROR("Faied to send data over ble @ %d in %s\n",__LINE__,__FILE__);
-               }
-            }
-            index = 0;
-            return;
-#endif
             /*remove above code after testing*/
             if(rxdata[index] == FIRST_CHAR_OF_MESSAGE) //start of message
             {
@@ -166,7 +145,24 @@ static void uart_event_handle(app_uart_evt_t * p_event)
             break;
     }
 }
-
+void txm_uart_send(char *pdata, uint8_t length)
+{
+        uint32_t       err_code;
+        
+        for (uint32_t i = 0; i < length; i++)
+        {
+            do
+            {
+                err_code = app_uart_put(pdata[i]);
+                if ((err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_BUSY))
+                {
+                    TXM_LOG_ERROR("Failed receiving NUS message. Error 0x%x. ", err_code);
+                }
+            } while (err_code == NRF_ERROR_BUSY);
+        }
+         while (app_uart_put('\n') == NRF_ERROR_BUSY);
+      
+}
 void txm_uart_init(void)
 {
     uint32_t                     err_code;
@@ -202,6 +198,6 @@ void txm_uart_init(void)
         return;
     }
 
-    //register_uart_task();
+    register_uart_task();
 
 }
